@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chispa"
+version = "0.1.0"
+description = "Automated Anki card creator for language learning"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "elevenlabs>=1.0.0",
+    "requests>=2.28.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+chispa = "chispa.cli:main"

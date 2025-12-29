@@ -1,0 +1,18 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# OS
+.DS_Store
+
+# Project
+.notes/
+*.txt
+!requirements.txt
