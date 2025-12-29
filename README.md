@@ -22,6 +22,11 @@ Before using Chispa, ensure you have:
 
 3. **Python 3.10+**
 
+4. **"All-Purpose" Note Type** from [Fluent Forever](https://blog.fluent-forever.com/gallery/)
+   - Download the Model Deck from the link above
+   - Double-click to import into Anki
+   - Field mappings are hardcoded for this note type
+
 ---
 
 ## Installation
