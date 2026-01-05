@@ -1,55 +1,61 @@
 """CLI interface for Chispa."""
 
 import argparse
+import re
 import sys
 from pathlib import Path
+
+# Pattern to detect blank placeholders (2+ underscores)
+BLANK_PATTERN = re.compile(r"_{2,}")
 
 from .config import validate_config, ANKI_DECK_SPANISH, ANKI_DECK_ENGLISH
 from .dictionary import lookup_word, WordMeaning
 from .image_gen import generate_image, get_image_reference
 from .audio_gen import generate_audio, get_audio_reference
 from .anki_client import AnkiClient, create_card_data, AnkiConnectError
+from .spinner import Spinner
 
 
 def create_card_for_meaning(word: str, meaning: WordMeaning, client: AnkiClient, lang: str = "es") -> bool:
-    """
-    Create a complete Anki card for a word meaning.
-
-    Returns True if successful, False otherwise.
-    """
+    """Create a complete Anki card for a word meaning."""
     print(f"\n  Creating card for: {word} = {meaning.definition}")
 
-    # Determine which sentence to use for image/audio based on language
+    # Language determines image/audio source:
+    # - English: use English example for both
+    # - Non-English: use English translation for image (DALL-E works better), target language for audio
     if lang == "en":
-        # English: use the English example for both image and audio
         image_prompt = meaning.example
         audio_text = meaning.example
         deck = ANKI_DECK_ENGLISH
     else:
-        # Non-English: use English translation for image (better results), target language for audio
         image_prompt = meaning.translation
         audio_text = meaning.example
         deck = ANKI_DECK_SPANISH
 
-    # Generate image
-    print("  Generating image...")
+    image_ref = ""
+    audio_ref = ""
+
+    spinner = Spinner("Generating image...")
+    spinner.start()
     try:
         generate_image(image_prompt, word)
         image_ref = get_image_reference(word)
+        spinner.stop()
+        print(f"  ✓ Image generated")
     except Exception as e:
-        print(f"  Warning: Image generation failed: {e}")
-        image_ref = ""
+        spinner.stop()
+        print(f"  ⚠ Image failed: {e}")
 
-    # Generate audio
-    print("  Generating audio...")
-    try:
-        generate_audio(audio_text, word)
-        audio_ref = get_audio_reference(word)
-    except Exception as e:
-        print(f"  Warning: Audio generation failed: {e}")
-        audio_ref = ""
+    if BLANK_PATTERN.search(audio_text):
+        print(f"  ⚠ Audio skipped: sentence contains blanks")
+    else:
+        try:
+            generate_audio(audio_text, word)
+            audio_ref = get_audio_reference(word)
+            print(f"  ✓ Audio generated")
+        except Exception as e:
+            print(f"  ⚠ Audio failed: {e}")
 
-    # Create and add the card
     print("  Adding to Anki...")
     card = create_card_data(
         word=word,
@@ -64,10 +70,10 @@ def create_card_for_meaning(word: str, meaning: WordMeaning, client: AnkiClient,
 
     try:
         note_id = client.add_note(card, deck=deck)
-        print(f"  Card created! (Note ID: {note_id})")
+        print(f"  ✓ Card created (Note ID: {note_id})")
         return True
     except AnkiConnectError as e:
-        print(f"  Error adding card: {e}")
+        print(f"  ✗ Error adding card: {e}")
         return False
 
 
@@ -75,12 +81,10 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
     """Add a single word interactively."""
     lang_name = "English" if lang == "en" else "Spanish"
 
-    # Parse inline hint: "word | hint"
     if "|" in word:
         parts = word.split("|", 1)
         word = parts[0].strip()
         inline_hint = parts[1].strip()
-        # Combine with -c context if both provided
         if context:
             current_context = f"{context}; {inline_hint}"
         else:
@@ -88,13 +92,14 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
     else:
         current_context = context
 
-    while True:  # Loop for retry functionality
+    selected: WordMeaning | None = None
+
+    while True:
         if current_context:
             print(f"Looking up ({lang_name}): {word} (context: {current_context})")
         else:
             print(f"Looking up ({lang_name}): {word}")
 
-        # Look up the word
         try:
             result = lookup_word(word, context=current_context, lang=lang)
         except Exception as e:
@@ -105,7 +110,6 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
             print(f"No meanings found for '{word}'")
             return 1
 
-        # Show meanings
         print(f"\nFound {len(result.meanings)} meaning(s):\n")
         for i, meaning in enumerate(result.meanings, 1):
             print(f"  {i}. {meaning.definition} ({meaning.part_of_speech})")
@@ -114,7 +118,6 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
                 print(f"     Translation: {meaning.translation}")
             print()
 
-        # If only one meaning, still allow retry
         if len(result.meanings) == 1:
             print("Only one meaning found.")
             while True:
@@ -135,10 +138,9 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
                     return 1
             if choice.lower() == 'r':
                 print()
-                continue  # Retry lookup
-            break  # Exit retry loop
+                continue
+            break
         else:
-            # Let user select
             while True:
                 try:
                     choice = input(f"Select [1-{len(result.meanings)}] or 'r' to retry with hint: ").strip()
@@ -160,23 +162,20 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
                     return 1
             if choice.lower() == 'r':
                 print()
-                continue  # Retry lookup
-            break  # Exit retry loop
+                continue
+            break
 
-    # Check AnkiConnect
     client = AnkiClient()
     if not client.is_available():
         print("\nError: Cannot connect to Anki. Make sure Anki is running and AnkiConnect is installed.")
         return 1
 
-    # Use normalized word (with proper accents)
     normalized_word = result.word
     if normalized_word != word:
         print(f"\n  Normalized: {word} → {normalized_word}")
 
-    # Create the card
     deck = ANKI_DECK_ENGLISH if lang == "en" else ANKI_DECK_SPANISH
-    if create_card_for_meaning(normalized_word, selected, client, lang=lang):
+    if selected and create_card_for_meaning(normalized_word, selected, client, lang=lang):
         print(f"\nSuccess! Card for '{normalized_word}' added to deck '{deck}'")
         return 0
     else:
@@ -193,29 +192,23 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
     lang_name = "English" if lang == "en" else "Spanish"
     print(f"Processing {lang_name} words...")
 
-    # Check AnkiConnect first
     client = AnkiClient()
     if not client.is_available():
         print("Error: Cannot connect to Anki. Make sure Anki is running and AnkiConnect is installed.")
         return 1
 
-    # Read words from file
     lines = path.read_text().strip().split("\n")
     words_to_process = []
-    words_with_hint = {}  # word -> context hint
+    words_with_hint: dict[str, str] = {}
 
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
 
-        # Parse line formats:
-        #   word
-        #   word | hint
         word = line
         hint = None
 
-        # Check for hint (|)
         if "|" in word:
             parts = word.split("|", 1)
             word = parts[0].strip()
@@ -231,7 +224,6 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
 
     print(f"Processing {len(words_to_process)} word(s)...\n")
 
-    # Track results
     created = []
     failed = []
 
@@ -242,7 +234,6 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
         else:
             print(f"--- {word} ---")
 
-        # Look up the word
         try:
             result = lookup_word(word, context=hint, lang=lang)
         except Exception as e:
@@ -255,11 +246,9 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
             failed.append(word)
             continue
 
-        # Meaning selection loop (handles retries)
         current_context = hint
-        selected = None
+        selected: WordMeaning | None = None
         while True:
-            # Display meanings
             print(f"  Found {len(result.meanings)} meaning(s):\n")
             for i, meaning in enumerate(result.meanings, 1):
                 print(f"    {i}. {meaning.definition} ({meaning.part_of_speech})")
@@ -268,7 +257,6 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
                     print(f"       Translation: {meaning.translation}")
                 print()
 
-            # Get user choice
             if len(result.meanings) == 1:
                 prompt = "  Press Enter to use it, 's' skip, 'r' retry: "
             else:
@@ -304,11 +292,9 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
                     print("\n  Cancelled batch")
                     return 1
 
-            # Handle the choice
             if choice.lower() == 's':
-                break  # Exit meaning loop, word is in failed
+                break
             elif choice.lower() == 'r':
-                # Retry lookup with hint
                 print(f"  Retrying with hint: {current_context}")
                 try:
                     result = lookup_word(word, context=current_context, lang=lang)
@@ -320,26 +306,22 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
                     print(f"  Error: {e}")
                     failed.append(word)
                     break
-                continue  # Show new meanings
+                continue
             else:
-                break  # Selected a meaning, exit loop
+                break
 
-        # Skip to next word if failed/skipped
         if selected is None:
             continue
 
-        # Use normalized word (with proper accents)
         normalized_word = result.word
         if normalized_word != word:
             print(f"  Normalized: {word} → {normalized_word}")
 
-        # Create the card (use normalized word, but track original for file removal)
         if create_card_for_meaning(normalized_word, selected, client, lang=lang):
-            created.append(word)  # Track original word for file removal
+            created.append(word)
         else:
             failed.append(word)
 
-    # Summary
     print(f"\n--- Summary ---")
     print(f"Created: {len(created)}")
     print(f"Skipped/Failed: {len(failed)}")
@@ -347,26 +329,21 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
     if failed:
         print(f"\nFailed words: {', '.join(failed)}")
 
-    # Remove successfully created words from the file
     if created:
         created_set = set(created)
         remaining_lines = []
         for line in lines:
             stripped = line.strip()
-            # Keep comments and empty lines
             if not stripped or stripped.startswith("#"):
                 remaining_lines.append(line)
                 continue
-            # Check if this line's word was successfully created
             word = stripped.split("|")[0].strip() if "|" in stripped else stripped
             if word not in created_set:
                 remaining_lines.append(line)
 
-        # Write back to file
         if remaining_lines:
             path.write_text("\n".join(remaining_lines) + "\n")
         else:
-            # All words processed, empty the file
             path.write_text("")
         print(f"\nUpdated {filepath}: {len(created)} word(s) removed")
 
@@ -393,7 +370,6 @@ Batch workflow for multiple languages:
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    # Add command
     add_parser = subparsers.add_parser("add", help="Add a single word")
     add_parser.add_argument("word", help="The word to add")
     add_parser.add_argument(
@@ -408,7 +384,6 @@ Batch workflow for multiple languages:
         default="es"
     )
 
-    # Batch command
     batch_parser = subparsers.add_parser("batch", help="Process words from a file")
     batch_parser.add_argument("file", help="Path to file with words (one per line)")
     batch_parser.add_argument(
@@ -420,7 +395,6 @@ Batch workflow for multiple languages:
 
     args = parser.parse_args()
 
-    # Validate configuration
     errors = validate_config()
     if errors:
         print("Configuration errors:")

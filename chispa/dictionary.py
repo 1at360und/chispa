@@ -1,10 +1,39 @@
 """Dictionary lookup using OpenAI for reliable, structured results."""
 
 import json
+import re
 from dataclasses import dataclass
 from openai import OpenAI
 
 from .config import OPENAI_API_KEY
+
+
+def parse_marked_sentence(marked: str) -> tuple[str, str]:
+    """
+    Parse a sentence with **marked** word(s) into full and blanked versions.
+
+    Example:
+        "El **cajero** fue amable." -> ("El cajero fue amable.", "El ___ fue amable.")
+        "El **golpe de estado** fue rápido." -> ("El golpe de estado fue rápido.", "El ___ ___ ___ fue rápido.")
+
+    Returns (full_sentence, blanked_sentence). If no markers found, returns (marked, marked).
+    """
+    pattern = re.compile(r"\*\*(.+?)\*\*")
+    matches = pattern.findall(marked)
+
+    if not matches:
+        return marked, marked
+
+    full = pattern.sub(r"\1", marked)
+
+    def blank_replacement(match: re.Match) -> str:
+        word = match.group(1)
+        word_count = len(word.split())
+        return " ".join(["___"] * word_count)
+
+    blanked = pattern.sub(blank_replacement, marked)
+
+    return full, blanked
 
 
 @dataclass
@@ -64,10 +93,6 @@ Return the most common/useful meanings (up to 5, but fewer if the word has limit
 Order by frequency of use (most common first).
 """
 
-    # Compute blanking info for multi-word phrases
-    word_count = len(word.split())
-    blank_pattern = ' '.join(['___'] * word_count)
-
     if lang == "en":
         prompt = f"""Look up the English word/phrase "{word}" and provide its meanings.
 
@@ -76,8 +101,7 @@ Order by frequency of use (most common first).
 For each meaning, provide:
 1. The definition (clear explanation of the meaning)
 2. Part of speech (noun, verb, adjective, etc.)
-3. An example sentence in English using this word with this specific meaning
-4. The same sentence but with the word/phrase blanked out
+3. An example sentence with the word/phrase wrapped in **double asterisks**
 
 Return as JSON with this exact structure:
 {{
@@ -86,8 +110,7 @@ Return as JSON with this exact structure:
         {{
             "definition": "Clear definition/explanation",
             "part_of_speech": "noun",
-            "example": "English example sentence",
-            "example_blanked": "English sentence with the word/phrase blanked"
+            "example": "The **word** appears in this sentence."
         }}
     ]
 }}
@@ -96,18 +119,15 @@ IMPORTANT - Word normalization:
 - The "word" field must contain the CORRECTLY SPELLED word
 - Fix any typos or missing accents in borrowed words (e.g., "naive" → "naïve", "cafe" → "café")
 
-CRITICAL for blanking - read carefully:
-- The phrase being looked up is: "{word}" ({word_count} word(s))
-- You MUST blank it as: {blank_pattern}
-- Blank the ENTIRE phrase "{word}", not just part of it
-- For verbs, blank the CONJUGATED form as it appears in the sentence
-- Do NOT leave any part of the lookup phrase visible in the blanked version
+CRITICAL - Marking the word:
+- Wrap the word/phrase with **double asterisks** in the example sentence
+- For verbs, mark the CONJUGATED form (e.g., "She **ran** to the store" not "She **run** to the store")
+- For multi-word phrases, wrap the entire phrase (e.g., "**in the end**")
 
 Important:
 - Definition should explain the meaning clearly, not just give a synonym
 - Include slang, vulgar, or colloquial meanings if commonly used (this is for educational purposes)
 - For vulgar/slang words, be DIRECT - say "pussy" not "vulgar term for female genitalia". Learners need exact meanings.
-- NEVER censor or blank words in English translations
 - SENTENCE COMPLEXITY SHOULD MATCH THE WORD: basic vocabulary can have simple sentences, but advanced vocabulary (GRE-level), idioms, and literary words should have sophisticated, contextually rich sentences
 - Handle idioms, phrasal verbs, and multi-word expressions naturally (e.g., "in the end", "break down", "get away with")
 - Example sentences should demonstrate authentic usage, not oversimplified textbook sentences
@@ -121,9 +141,8 @@ Important:
 For each meaning, provide:
 1. The English translation/definition
 2. Part of speech (noun, verb, adjective, etc.)
-3. An example sentence in Spanish using this word with this specific meaning
-4. The same Spanish sentence but with the word/phrase blanked out (use ___ for single words, __ __ for multi-word phrases matching word count)
-5. The English translation of that example sentence
+3. An example sentence in Spanish with the word/phrase wrapped in **double asterisks**
+4. The English translation of that example sentence
 
 Return as JSON with this exact structure:
 {{
@@ -132,9 +151,8 @@ Return as JSON with this exact structure:
         {{
             "definition": "English translation",
             "part_of_speech": "noun",
-            "example_spanish": "Spanish example sentence",
-            "example_spanish_blanked": "Spanish sentence with ___ or __ __ __ for the word",
-            "example_english": "English translation of example"
+            "example_spanish": "La **palabra** aparece en esta oración.",
+            "example_english": "The word appears in this sentence."
         }}
     ]
 }}
@@ -145,19 +163,15 @@ IMPORTANT - Word normalization:
 - Example: if user looks up "cafe", return "word": "café"
 - Always use proper Spanish orthography with tildes, accents, ñ, etc.
 
-CRITICAL for blanking - read carefully:
-- The phrase being looked up is: "{word}" ({word_count} word(s))
-- You MUST blank it as: {blank_pattern}
-- Blank the ENTIRE phrase "{word}", not just part of it
-- For verbs, blank the CONJUGATED form as it appears in the sentence
-- Do NOT leave any part of the lookup phrase visible in the blanked version
-- Example: if looking up "si puedo", the sentence "Si puedo, iré" becomes "___ ___, iré"
+CRITICAL - Marking the word:
+- Wrap the word/phrase with **double asterisks** in the Spanish example sentence
+- For verbs, mark the CONJUGATED form (e.g., "Ella **corrió** a la tienda" not "Ella **correr** a la tienda")
+- For multi-word phrases, wrap the entire phrase (e.g., "**echar de menos**")
 
 Important:
 - Definition length should match complexity: simple nouns can be 1-2 words ("bench", "bank"), but verbs, idioms, or nuanced words may need a short phrase or explanation
 - Include slang, vulgar, or colloquial meanings if commonly used (this is for educational purposes)
 - For vulgar/slang words, be DIRECT - say "pussy" not "vulgar term for female genitalia". Learners need exact meanings.
-- NEVER censor or blank words in English translations
 - SENTENCE COMPLEXITY SHOULD MATCH THE WORD: basic vocabulary (A1-A2) can have simple sentences, but advanced vocabulary (B2-C2), idioms, and literary words should have sophisticated, contextually rich sentences
 - Handle idioms, phrasal verbs, and multi-word expressions naturally (e.g., "echar de menos", "in the end", "dar a luz")
 - Example sentences should demonstrate authentic usage, not oversimplified textbook sentences
@@ -185,27 +199,25 @@ Important:
     meanings = []
     for m in data.get("meanings", []):
         if lang == "en":
-            # English: example is in English only, no translation needed
-            meanings.append(
-                WordMeaning(
-                    definition=m.get("definition", ""),
-                    part_of_speech=m.get("part_of_speech", ""),
-                    example=m.get("example", ""),
-                    example_blanked=m.get("example_blanked", ""),
-                    translation="",  # No translation for English
-                )
-            )
+            marked = m.get("example", "")
+            translation = ""
         else:
-            # Non-English: has target language example + English translation
-            meanings.append(
-                WordMeaning(
-                    definition=m.get("definition", ""),
-                    part_of_speech=m.get("part_of_speech", ""),
-                    example=m.get("example_spanish", ""),
-                    example_blanked=m.get("example_spanish_blanked", ""),
-                    translation=m.get("example_english", ""),
-                )
+            marked = m.get("example_spanish", "")
+            translation = m.get("example_english", "")
+            # Strip any accidental markers from translation
+            translation = re.sub(r"\*\*(.+?)\*\*", r"\1", translation)
+
+        example, example_blanked = parse_marked_sentence(marked)
+
+        meanings.append(
+            WordMeaning(
+                definition=m.get("definition", ""),
+                part_of_speech=m.get("part_of_speech", ""),
+                example=example,
+                example_blanked=example_blanked,
+                translation=translation,
             )
+        )
 
     return WordLookupResult(word=normalized_word, meanings=meanings)
 
