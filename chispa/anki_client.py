@@ -3,7 +3,7 @@
 import requests
 from dataclasses import dataclass
 
-from .config import ANKI_CONNECT_URL, ANKI_DECK_SPANISH, ANKI_NOTE_TYPE, ANKI_FIELDS
+from .config import ANKI_CONNECT_URL, ANKI_DECK_SPANISH, ANKI_NOTE_TYPE, ANKI_FIELDS, ANKI_DECK_ENGLISH
 
 
 @dataclass
@@ -65,6 +65,34 @@ class AnkiClient:
     def get_note_types(self) -> list[str]:
         """Get list of note type names."""
         return self._request("modelNames")
+
+    def find_existing_cards(self, word: str, deck: str) -> list[str]:
+        """
+        Find existing cards for a word in the given deck.
+
+        Args:
+            word: The word to search for
+            deck: The deck name to search in
+
+        Returns:
+            List of definitions from existing cards with this word
+        """
+        field_name = ANKI_FIELDS["back_word"]
+        query = f'deck:"{deck}" "{field_name}:{word}"'
+
+        note_ids = self._request("findNotes", {"query": query})
+        if not note_ids:
+            return []
+
+        notes = self._request("notesInfo", {"notes": note_ids})
+        definitions = []
+        def_field = ANKI_FIELDS["front_definition"]
+        for note in notes:
+            if def_field in note["fields"]:
+                value = note["fields"][def_field]["value"]
+                if value:
+                    definitions.append(value)
+        return definitions
 
     def add_note(self, card: AnkiCard, deck: str = ANKI_DECK_SPANISH) -> int:
         """

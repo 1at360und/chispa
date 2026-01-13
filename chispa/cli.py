@@ -80,6 +80,7 @@ def create_card_for_meaning(word: str, meaning: WordMeaning, client: AnkiClient,
 def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
     """Add a single word interactively."""
     lang_name = "English" if lang == "en" else "Spanish"
+    deck = ANKI_DECK_ENGLISH if lang == "en" else ANKI_DECK_SPANISH
 
     if "|" in word:
         parts = word.split("|", 1)
@@ -91,6 +92,31 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
             current_context = inline_hint
     else:
         current_context = context
+
+    # Check Anki connection early
+    client = AnkiClient()
+    if not client.is_available():
+        print("Error: Cannot connect to Anki. Make sure Anki is running and AnkiConnect is installed.")
+        return 1
+
+    # Check for existing cards with this word
+    try:
+        existing = client.find_existing_cards(word, deck)
+        if existing:
+            print(f"\nExisting card(s) for '{word}':")
+            for defn in existing:
+                print(f"  • {defn}")
+            try:
+                confirm = input("Add another meaning? [y/N]: ").strip().lower()
+                if confirm != 'y':
+                    print("Skipped.")
+                    return 0
+            except KeyboardInterrupt:
+                print("\nCancelled")
+                return 1
+            print()
+    except AnkiConnectError as e:
+        print(f"Warning: Could not check for duplicates: {e}")
 
     selected: WordMeaning | None = None
 
@@ -165,16 +191,10 @@ def cmd_add(word: str, context: str | None = None, lang: str = "es") -> int:
                 continue
             break
 
-    client = AnkiClient()
-    if not client.is_available():
-        print("\nError: Cannot connect to Anki. Make sure Anki is running and AnkiConnect is installed.")
-        return 1
-
     normalized_word = result.word
     if normalized_word != word:
         print(f"\n  Normalized: {word} → {normalized_word}")
 
-    deck = ANKI_DECK_ENGLISH if lang == "en" else ANKI_DECK_SPANISH
     if selected and create_card_for_meaning(normalized_word, selected, client, lang=lang):
         print(f"\nSuccess! Card for '{normalized_word}' added to deck '{deck}'")
         return 0
@@ -190,6 +210,7 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
         return 1
 
     lang_name = "English" if lang == "en" else "Spanish"
+    deck = ANKI_DECK_ENGLISH if lang == "en" else ANKI_DECK_SPANISH
     print(f"Processing {lang_name} words...")
 
     client = AnkiClient()
@@ -233,6 +254,25 @@ def cmd_batch(filepath: str, lang: str = "es") -> int:
             print(f"--- {word} (hint: {hint}) ---")
         else:
             print(f"--- {word} ---")
+
+        # Check for existing cards with this word
+        try:
+            existing = client.find_existing_cards(word, deck)
+            if existing:
+                print(f"  Existing card(s):")
+                for defn in existing:
+                    print(f"    • {defn}")
+                try:
+                    confirm = input("  Add another meaning? [y/N]: ").strip().lower()
+                    if confirm != 'y':
+                        print(f"  Skipped")
+                        failed.append(word)
+                        continue
+                except KeyboardInterrupt:
+                    print("\n  Cancelled batch")
+                    return 1
+        except AnkiConnectError as e:
+            print(f"  Warning: Could not check for duplicates: {e}")
 
         try:
             result = lookup_word(word, context=hint, lang=lang)
