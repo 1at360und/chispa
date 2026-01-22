@@ -46,21 +46,37 @@ def generate_image(prompt: str, word: str) -> Path:
     Returns:
         Path to the saved image file
     """
+    from openai import BadRequestError
+
     client = OpenAI(api_key=OPENAI_API_KEY)
 
-    # Generate a safe image prompt (handles vulgar/explicit content)
-    safe_prompt = generate_safe_image_prompt(prompt)
-
     # Enhance the prompt for better image generation
-    enhanced_prompt = f"Create a clear, simple illustration that depicts: {safe_prompt}. Style: clean, educational, suitable for a flashcard. No text in the image."
+    enhanced_prompt = f"Create a clear, simple illustration that depicts: {
+        prompt}. Style: clean, educational, suitable for a flashcard. No text in the image."
 
-    response = client.images.generate(
-        model=IMAGE_MODEL,
-        prompt=enhanced_prompt,
-        size="1024x1024",
-        quality="auto",
-        n=1,
-    )
+    try:
+        response = client.images.generate(
+            model=IMAGE_MODEL,
+            prompt=enhanced_prompt,
+            size="1024x1024",
+            quality="auto",
+            n=1,
+        )
+    except BadRequestError as e:
+        # Content policy rejection - try with sanitized prompt
+        if "safety" in str(e).lower() or "content_policy" in str(e).lower() or "400" in str(e):
+            safe_prompt = generate_safe_image_prompt(prompt)
+            enhanced_prompt = f"Create a clear, simple illustration that depicts: {
+                safe_prompt}. Style: clean, educational, suitable for a flashcard. No text in the image."
+            response = client.images.generate(
+                model=IMAGE_MODEL,
+                prompt=enhanced_prompt,
+                size="1024x1024",
+                quality="auto",
+                n=1,
+            )
+        else:
+            raise
 
     # Get the image URL or base64 data
     image_data = response.data[0]
@@ -95,7 +111,8 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    prompt = sys.argv[1] if len(sys.argv) > 1 else "A person sitting on a bench in a park"
+    prompt = sys.argv[1] if len(
+        sys.argv) > 1 else "A person sitting on a bench in a park"
     word = sys.argv[2] if len(sys.argv) > 2 else "test"
 
     print(f"Generating image for: {prompt}")
